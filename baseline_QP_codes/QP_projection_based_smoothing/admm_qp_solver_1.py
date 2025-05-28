@@ -113,13 +113,14 @@ class qp_solver():
 	
 
 	@partial(jit, static_argnums=(0,))
-	def compute_projection(self, lamda, vel_projected, vel_init, vel_samples, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, theta_min, theta_max, theta_init):
+	def compute_projection(self, lamda, vel_projected, vel_init, vel_samples, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, theta_min, theta_max, theta_init, s):
 	 		
 
 		vel_projected_init = vel_projected 
 		lamda_init = lamda 
 
-		s_init = self.compute_s_init(vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected, theta_min, theta_max, theta_init) 
+		# s_init = self.compute_s_init(vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected, theta_min, theta_max, theta_init) 
+		s_init = s
 
 		b_eq = self.compute_boundary_vec(vel_init)
 
@@ -130,11 +131,14 @@ class qp_solver():
 			vel_projected, lamda, s = carry
 			vel_projected_prev = vel_projected 
 			lamda_prev = lamda 
+			s_prev = s
 	  
 			vel_projected, s, res_norm, lamda = self.compute_feasible_control(vel_samples, b_eq, s, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected, lamda, theta_min, theta_max, theta_init)
 	 
 			primal_residual = res_norm 
-			fixed_point_residual = jnp.linalg.norm(vel_projected_prev-vel_projected, axis = 1)+jnp.linalg.norm(lamda_prev-lamda_prev, axis = 1)
+			# fixed_point_residual = jnp.linalg.norm(vel_projected_prev-vel_projected, axis = 1)+jnp.linalg.norm(lamda_prev-lamda_prev, axis = 1)
+			fixed_point_residual = jnp.linalg.norm(s_prev-s, axis = 1)+jnp.linalg.norm(lamda_prev-lamda_prev, axis = 1)
+			
 
 			
 			return (vel_projected, lamda, s), (primal_residual, fixed_point_residual)		
