@@ -31,7 +31,9 @@ class qp_solver():
 		self.rho = 1.0
 		self.rho_projection = 1.0
 		self.A_projection = jnp.identity(self.num)
+		
 		self.P_vel = jnp.identity(self.num)
+		self.P_pos = jnp.cumsum(self.P_vel*self.t, axis = 0)
 		self.P_acc = jnp.diff(self.P_vel, axis = 0)/t 
 		self.P_jerk = jnp.diff(self.P_acc, axis = 0)/t 
 		self.num_acc = self.num-1 
@@ -39,7 +41,7 @@ class qp_solver():
 		self.maxiter = 1000
 
 
-		self.num_constraints = self.num+self.num_acc+self.num_jerk 
+		
 
 		self.A_eq = self.P_vel[0].reshape(1, self.nvar)
 
@@ -47,8 +49,10 @@ class qp_solver():
 		self.A_vel = jnp.vstack(( self.P_vel, -self.P_vel  ))
 		self.A_acc = jnp.vstack(( self.P_acc, -self.P_acc  ))
 		self.A_jerk = jnp.vstack(( self.P_jerk, -self.P_jerk  ))
-		self.A_control = jnp.vstack(( self.A_vel, self.A_acc, self.A_jerk ))
+		self.A_pos = jnp.vstack(( self.P_pos, -self.P_pos  ))
+		self.A_control = jnp.vstack(( self.A_vel, self.A_acc, self.A_jerk, self.A_pos ))
 
+		self.num_constraints = jnp.shape(self.A_control)[0]
 
 	
 	@partial(jit, static_argnums=(0,))	
@@ -62,25 +66,27 @@ class qp_solver():
 	
 
 	@partial(jit, static_argnums=(0,))
-	def compute_s_init(self, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected):
+	def compute_s_init(self, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected, theta_min, theta_max, theta_init):
 
 		b_vel = jnp.hstack(( vel_max*jnp.ones(( self.num_batch, self.num  )), -vel_min*jnp.ones(( self.num_batch, self.num  ))     ))
 		b_acc = jnp.hstack(( acc_max*jnp.ones(( self.num_batch, self.num_acc  )), -acc_min*jnp.ones(( self.num_batch, self.num_acc  ))     ))
 		b_jerk = jnp.hstack(( jerk_max*jnp.ones(( self.num_batch, self.num_jerk  )), -jerk_min*jnp.ones(( self.num_batch, self.num_jerk  ))     ))		
-		b_control = jnp.hstack(( b_vel, b_acc, b_jerk  ))
+		b_pos = jnp.hstack(( (theta_max-theta_init)*jnp.ones(( self.num_batch, self.num  )), -(theta_min-theta_init)*jnp.ones(( self.num_batch, self.num  ))   )   )
+		b_control = jnp.hstack(( b_vel, b_acc, b_jerk, b_pos  ))
 
-		s = jnp.maximum( jnp.zeros(( self.num_batch, 2*self.num+2*self.num_acc+2*self.num_jerk )), -jnp.dot(self.A_control, vel_projected.T).T+b_control  )
+		s = jnp.maximum( jnp.zeros(( self.num_batch, self.num_constraints )), -jnp.dot(self.A_control, vel_projected.T).T+b_control  )
 		
 		return s
 
 
 	@partial(jit, static_argnums=(0,))
-	def compute_feasible_control(self, vel_samples, b_eq, s, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected, lamda):
+	def compute_feasible_control(self, vel_samples, b_eq, s, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected, lamda, theta_min, theta_max, theta_init):
 	 
 		b_vel = jnp.hstack(( vel_max*jnp.ones(( self.num_batch, self.num  )), -vel_min*jnp.ones(( self.num_batch, self.num  ))     ))
 		b_acc = jnp.hstack(( acc_max*jnp.ones(( self.num_batch, self.num_acc  )), -acc_min*jnp.ones(( self.num_batch, self.num_acc  ))     ))
-		b_jerk = jnp.hstack(( jerk_max*jnp.ones(( self.num_batch, self.num_jerk )), -jerk_min*jnp.ones(( self.num_batch, self.num_jerk  ))     ))		
-		b_control = jnp.hstack(( b_vel, b_acc, b_jerk  ))
+		b_jerk = jnp.hstack(( jerk_max*jnp.ones(( self.num_batch, self.num_jerk  )), -jerk_min*jnp.ones(( self.num_batch, self.num_jerk  ))     ))		
+		b_pos = jnp.hstack(( (theta_max-theta_init)*jnp.ones(( self.num_batch, self.num  )), -(theta_min-theta_init)*jnp.ones(( self.num_batch, self.num  ))   )   )
+		b_control = jnp.hstack(( b_vel, b_acc, b_jerk, b_pos  ))
 
 		# s = jnp.maximum( jnp.zeros(( self.num_batch, 2*self.num+2*self.num_acc+2*self.num_jerk )), -jnp.dot(self.A_control, vel_projected.T).T+b_control  )
 		
@@ -96,7 +102,7 @@ class qp_solver():
 		
 		vel_projected = sol[:, 0: self.nvar]
   
-		s = jnp.maximum( jnp.zeros(( self.num_batch, 2*self.num+2*self.num_acc+2*self.num_jerk )), -jnp.dot(self.A_control, vel_projected.T).T+b_control  )
+		s = jnp.maximum( jnp.zeros(( self.num_batch, self.num_constraints )), -jnp.dot(self.A_control, vel_projected.T).T+b_control  )
 		res_vec = jnp.dot(self.A_control, vel_projected.T).T-b_control+s
 
 		res_norm = jnp.linalg.norm(res_vec, axis = 1)
@@ -107,13 +113,13 @@ class qp_solver():
 	
 
 	@partial(jit, static_argnums=(0,))
-	def compute_projection(self, lamda, vel_projected, vel_init, vel_samples, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min):
+	def compute_projection(self, lamda, vel_projected, vel_init, vel_samples, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, theta_min, theta_max, theta_init):
 	 		
 
 		vel_projected_init = vel_projected 
 		lamda_init = lamda 
 
-		s_init = self.compute_s_init(vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected)
+		s_init = self.compute_s_init(vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected, theta_min, theta_max, theta_init) 
 
 		b_eq = self.compute_boundary_vec(vel_init)
 
@@ -125,7 +131,7 @@ class qp_solver():
 			vel_projected_prev = vel_projected 
 			lamda_prev = lamda 
 	  
-			vel_projected, s, res_norm, lamda = self.compute_feasible_control(vel_samples, b_eq, s, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected, lamda)
+			vel_projected, s, res_norm, lamda = self.compute_feasible_control(vel_samples, b_eq, s, vel_max, vel_min, acc_max, acc_min, jerk_max, jerk_min, vel_projected, lamda, theta_min, theta_max, theta_init)
 	 
 			primal_residual = res_norm 
 			fixed_point_residual = jnp.linalg.norm(vel_projected_prev-vel_projected, axis = 1)+jnp.linalg.norm(lamda_prev-lamda_prev, axis = 1)
@@ -141,6 +147,9 @@ class qp_solver():
 		primal_residual, fixed_point_residual = res_tot
   
 		return vel_projected, primal_residual, fixed_point_residual 
+
+
+		
 	
 
 
