@@ -48,7 +48,7 @@ class MLP_Init(nn.Module):
 
 class learned_qp_solver(nn.Module):
 
-	def __init__(self, num_batch, num, t, mlp_init, inp_mean, inp_std):
+	def __init__(self, num_batch, num, t, mlp_init):
 		super(learned_qp_solver, self).__init__()
 
 		
@@ -57,8 +57,8 @@ class learned_qp_solver(nn.Module):
 		self.nvar = self.num
 		self.t = t
 		self.mlp_init = mlp_init
-		self.inp_mean = inp_mean 
-		self.inp_std = inp_std
+		# self.inp_mean = inp_mean 
+		# self.inp_std = inp_std
 		
 		self.t_fin = num*t 
 		self.rho = 1.0
