@@ -71,7 +71,6 @@ class CustomGRULayer(nn.Module):
 		# Transformation layer to generate output from hidden state
 		self.output_transform = nn.Sequential(
 			nn.Linear(hidden_size, hidden_size),
-			nn.LayerNorm(hidden_size),
 			nn.Tanh(),
 			nn.Linear(hidden_size, output_size)
 		)
@@ -113,12 +112,12 @@ class GRU_Hidden_State(nn.Module):
 			nn.Linear(inp_dim, hidden_dim),
 			# nn.BatchNorm1d(hidden_dim),
 			nn.LayerNorm(hidden_dim),
-			nn.LeakyReLU(),
+			nn.ReLU(),
 
 			nn.Linear(hidden_dim, hidden_dim),
 			# nn.BatchNorm1d(hidden_dim),
 			nn.LayerNorm(hidden_dim),
-			nn.LeakyReLU(),
+			nn.ReLU(),
 			
 			nn.Linear(hidden_dim, out_dim),
 		)
@@ -161,12 +160,12 @@ class MLP_Init(nn.Module):
 			nn.Linear(inp_dim, hidden_dim),
 			# nn.BatchNorm1d(hidden_dim),
 			nn.LayerNorm(hidden_dim),
-			nn.LeakyReLU(),
+			nn.ReLU(),
 
 			nn.Linear(hidden_dim, hidden_dim),
 			# nn.BatchNorm1d(hidden_dim),
 			nn.LayerNorm(hidden_dim),
-			nn.LeakyReLU(),
+			nn.ReLU(),
 			
 			nn.Linear(hidden_dim, out_dim),
 		)
@@ -178,40 +177,28 @@ class MLP_Init(nn.Module):
 
 class Learned_QCQP(nn.Module):
 	
-	def __init__(self, num_obs, t_fin, P, Pdot, Pddot, point_net, num_batch, min_pcd, max_pcd, inp_mean, inp_std, gru_context_obs, gru_hidden_state_init_obs, gru_context_acc, gru_hidden_state_init_acc, gru_context_vel, gru_hidden_state_init_vel,  gru_context_slane, gru_hidden_state_init_slane, gru_context_lamda, gru_hidden_state_init_lamda, mlp_init_obs, mlp_init_acc, mlp_init_vel, mlp_init_slane, mlp_init_lamda):
+	def __init__(self, num_obs, t_fin, P, Pdot, Pddot, point_net, num_batch, min_pcd, max_pcd, inp_mean, inp_std, gru_context_alpha, gru_init_alpha, gru_context_d, gru_init_d, gru_context_s, gru_init_s, gru_context_lamda, gru_init_lamda,  mlp_init):
 		super(Learned_QCQP, self).__init__()
 		
 		# BayesMLP
 		
 		self.point_net = point_net 
-		self.mlp_init_obs = mlp_init_obs 
-		self.mlp_init_acc = mlp_init_acc 
-		self.mlp_init_vel = mlp_init_vel 
-		self.mlp_init_slane = mlp_init_slane  
-		self.mlp_init_lamda = mlp_init_lamda 
-		
+		self.mlp_init = mlp_init
 		#self.mlp_2 = mlp_2
   
-		self.gru_context_obs = gru_context_obs 
-		self.gru_hidden_state_init_obs = gru_hidden_state_init_obs
+		self.gru_context_alpha = gru_context_alpha 
+		self.gru_init_alpha = gru_init_alpha 
 
-		self.gru_context_acc = gru_context_acc 
-		self.gru_hidden_state_init_acc = gru_hidden_state_init_acc
-
-		self.gru_context_vel = gru_context_vel 
-		self.gru_hidden_state_init_vel = gru_hidden_state_init_vel 
-
-		self.gru_context_slane = gru_context_slane 
-		self.gru_hidden_state_init_slane = gru_hidden_state_init_slane 
-
+		self.gru_context_d = gru_context_d 
+		self.gru_init_d = gru_init_d 
+		
+		self.gru_context_s = gru_context_s 
+		self.gru_init_s = gru_init_s
+		
 		self.gru_context_lamda = gru_context_lamda 
-		self.gru_hidden_state_init_lamda = gru_hidden_state_init_lamda 
-				
-
-		# self.gru_context_primal = gru_context_primal 
-		# self.gru_hidden_state_init_primal = gru_hidden_state_init_primal
-
-
+		self.gru_init_lamda = gru_init_lamda
+		 
+		 
 		self.min_pcd = min_pcd 
 		self.max_pcd = max_pcd 
 
@@ -227,11 +214,10 @@ class Learned_QCQP(nn.Module):
 
 
 		self.A_eq_x = torch.vstack([self.P[0], self.Pdot[0], self.Pddot[0], self.P[-1]    ]  )
-		self.A_eq_y = torch.vstack([self.P[0], self.Pdot[0], self.Pddot[0]    ]  )
+		self.A_eq_y = torch.vstack([self.P[0], self.Pdot[0], self.Pddot[0], self.P[-1], self.Pdot[-1]     ]  )
 
 		self.A_eq = torch.block_diag(self.A_eq_x, self.A_eq_y)
   
-
 				
 		# No. of Variables
 		self.nvar = P.size(dim = 1)
@@ -239,7 +225,6 @@ class Learned_QCQP(nn.Module):
 		self.num_batch = num_batch
   
 		self.A_projection = torch.eye(self.nvar, device = device)
-		self.A_y_fin = self.P[-1].reshape(1, self.nvar)
 
 		# self.a_obs = 6.00
 		# self.b_obs = 3.20
@@ -258,10 +243,10 @@ class Learned_QCQP(nn.Module):
 		
 		# Parameters
 		  
-		self.rho_obs = 1.0
-		self.rho_ineq = 1.0
+		self.rho_obs = 0.8
+		self.rho_ineq = 0.8
 		self.rho_projection = 1
-		self.rho_lane = 1.0
+		self.rho_lane = 0.8
 		self.rho_projection = 1
 
 		self.weight_smoothness = 20.0
@@ -274,7 +259,7 @@ class Learned_QCQP(nn.Module):
   
 		self.cost_smoothness = self.weight_smoothness *( torch.eye(self.nvar, device = device))
 		self.weight_v_des = 2
-		self.weight_y_des = 1.0
+		self.weight_y_des = 2
   
 		
 		self.v_min = 0.001
@@ -292,7 +277,7 @@ class Learned_QCQP(nn.Module):
 		self.A_v_des = self.Pdot   
 		self.A_y_des = self.P
 
-		self.maxiter = 5 # 20
+		self.maxiter = 10 # 20
   
 		self.t_fin = t_fin
 		
@@ -305,7 +290,7 @@ class Learned_QCQP(nn.Module):
 		self.compute_obs_trajectories_batch = torch.vmap(self.compute_obs_trajectories, in_dims = (0, 0, 0, 0 )  )
 		self.compute_obs_ellipse_batch = torch.vmap(self.compute_obs_ellipse, in_dims = (0, 0 )  )
 		self.compute_x_init_batch = torch.vmap(self.compute_x_init, in_dims = (0, 0, 0, 0 )  )
-		self.compute_x_batch = torch.vmap(self.compute_x, in_dims = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 )  )
+		self.compute_x_batch = torch.vmap(self.compute_x, in_dims = (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 )  )
 		
 		
 
@@ -327,7 +312,7 @@ class Learned_QCQP(nn.Module):
 		vy_fin_vec = torch.zeros(( self.num_batch, 1   ), device = device)
   
 		b_eq_x = torch.hstack([x_init_vec, vx_init_vec, ax_init_vec, x_fin_vec  ])
-		b_eq_y = torch.hstack([y_init_vec, vy_init_vec, ay_init_vec ])
+		b_eq_y = torch.hstack([y_init_vec, vy_init_vec, ay_init_vec, y_fin_vec, vy_fin_vec  ])
 	
 		return b_eq_x, b_eq_y	
 	
@@ -556,7 +541,7 @@ class Learned_QCQP(nn.Module):
 	
 	
 	
-	def compute_x(self, b_eq_x, b_eq_y, x_obs_circle_traj, y_obs_circle_traj, a_obs, b_obs, lamda_x, lamda_y, alpha_obs, d_obs, alpha_a, d_a, alpha_v, d_v, y_ub, y_lb, s_lane, y_fin):
+	def compute_x(self, b_eq_x, b_eq_y, x_obs_circle_traj, y_obs_circle_traj, a_obs, b_obs, lamda_x, lamda_y, alpha_obs, d_obs, alpha_a, d_a, alpha_v, d_v, y_ub, y_lb, s_lane):
 
 		
 		b_ax_ineq = d_a * torch.cos(alpha_a)
@@ -577,9 +562,6 @@ class Learned_QCQP(nn.Module):
   	
 		b_lane = torch.hstack([y_ub * torch.ones(self.num, device=device), -y_lb * torch.ones(self.num, device=device)])
 		b_lane_aug = b_lane - s_lane
-
-		y_fin_vec = y_fin*torch.ones(self.num, device = device)
-		
   
 		# print(v_des.size())
    
@@ -593,13 +575,12 @@ class Learned_QCQP(nn.Module):
 					self.rho_obs * self.A_obs.T @ b_obs_y - \
 		   		 	self.rho_ineq * self.A_acc.T @ b_ay_ineq - \
 				 	self.rho_ineq * self.A_vel.T @ b_vy_ineq -\
-					self.rho_lane * self.A_lane.T @ b_lane_aug-\
-					self.weight_y_des * self.A_y_des.T @ y_fin_vec
+					self.rho_lane * self.A_lane.T @ b_lane_aug
 			
 
 
 		cost_x = self.cost_smoothness+self.rho_obs*torch.mm(self.A_obs.T, self.A_obs)+self.rho_ineq*torch.mm(self.A_acc.T, self.A_acc)+self.rho_ineq*torch.mm(self.A_vel.T, self.A_vel)
-		cost_y = cost_x+self.rho_lane*torch.mm(self.A_lane.T, self.A_lane)+self.weight_y_des*torch.mm(self.A_y_des.T, self.A_y_des)
+		cost_y = 3*self.cost_smoothness+self.rho_obs*torch.mm(self.A_obs.T, self.A_obs)+self.rho_ineq*torch.mm(self.A_acc.T, self.A_acc)+self.rho_ineq*torch.mm(self.A_vel.T, self.A_vel)+self.rho_lane*torch.mm(self.A_lane.T, self.A_lane)
 
 			
 		cost_mat_x = torch.vstack([torch.hstack([cost_x, self.A_eq_x.T]), torch.hstack([self.A_eq_x, torch.zeros((self.A_eq_x.shape[0], self.A_eq_x.shape[0]), device=device)])])
@@ -618,128 +599,129 @@ class Learned_QCQP(nn.Module):
 		return primal_sol
 	
 	
-	def custom_forward(self, init_state_ego, x_obs_circle_traj, y_obs_circle_traj, a_obs, b_obs, y_ub, y_lb, goal_des, alpha_d_obs, alpha_d_acc, alpha_d_vel, s_lane, lamda, h_0_obs, h_0_a, h_0_v):	
+	def custom_forward(self, init_state_ego, x_obs_circle_traj, y_obs_circle_traj, a_obs, b_obs, y_ub, y_lb, goal_des, lamda_x, lamda_y, s_lane, h_alpha, h_d, h_s, h_lamda, alpha, d):	
 
-		h_obs = h_0_obs 
-		h_a = h_0_a 
-		h_v = h_0_v
 		
 		accumulated_res_primal_list = [] 
 
 		accumulated_res_fixed_point_list= []
-		# # Boundary conditions
+		
 		b_eq_x, b_eq_y = self.compute_boundary_layer_optim(init_state_ego, goal_des)
-		
-		alpha_obs = alpha_d_obs[:, 0: self.num_obs*self.num_circles*self.num]
-		d_obs = d_obs[:, self.num_obs*self.num_circles*self.num : 2*self.num_obs*self.num_circles*self.num]
+	
+		alpha_obs = alpha[:, 0: self.num*self.num_obs*self.num_circles]
+		alpha_a = alpha[:, self.num*self.num_obs*self.num_circles : self.num*self.num_obs*self.num_circles+self.num ]
+		alpha_v = alpha[:, self.num*self.num_obs*self.num_circles+self.num : self.num*self.num_obs*self.num_circles+2*self.num ]
 
-		alpha_a = alpha_d_acc[:, 0: self.num ]
-		d_a = alpha_d_acc[:, self.num: 2*self.num ]
-
-		alpha_v = alpha_d_vel[:, 0: self.num ]
-		d_v = alpha_d_vel[:, self.num: 2*self.num ]
-
-		lamda_x = lamda[:, 0: self.nvar]
-		lamda_y = lamda[:, self.nvar: 2*self.nvar]
+		alpha_obs = torch.clip( alpha_obs, -torch.pi*torch.ones(( self.num_batch, self.num_obs*self.num_circles*self.num  ), device = device), torch.pi*torch.ones(( self.num_batch, self.num_obs*self.num_circles*self.num  ), device = device)  )
+		alpha_v = torch.clip( alpha_v, -torch.pi*torch.ones(( self.num_batch, self.num  ), device = device), torch.pi*torch.ones(( self.num_batch, self.num  ), device = device)  )
+		alpha_a = torch.clip( alpha_a, -torch.pi*torch.ones(( self.num_batch, self.num  ), device = device), torch.pi*torch.ones(( self.num_batch, self.num  ), device = device)  )
 
 		
-		y_fin = goal_des[:, 1].reshape(self.num_batch, 1)		
+		d_obs = d[:, 0: self.num*self.num_obs*self.num_circles]
+		d_a = d[:, self.num*self.num_obs*self.num_circles : self.num*self.num_obs*self.num_circles+self.num ]
+		d_v = d[:, self.num*self.num_obs*self.num_circles+self.num : self.num*self.num_obs*self.num_circles+2*self.num ]
+
+		d_obs = torch.maximum(torch.ones((self.num_batch, self.num * self.num_obs*self.num_circles), device=device), d_obs)
+		d_a = torch.clip(d_a, torch.zeros((self.num_batch, self.num), device=device), torch.tensor(self.a_max).to(device) )
+		d_v = torch.clip(d_v,  torch.tensor(self.v_min).to(device), torch.tensor(self.v_max).to(device))
+	
+  
+  
+		
 
 		for i in range(0, self.maxiter):
 
-			alpha_obs_prev = alpha_obs.clone()
-			d_obs_prev = d_obs.clone() 
-			alpha_a_prev = alpha_a.clone()
-			d_a_prev = d_a.clone()
-			alpha_v_prev = alpha_v.clone()
-			d_v_prev = d_v.clone() 
+			s_lane_prev = s_lane.clone()
 			lamda_x_prev = lamda_x.clone()
 			lamda_y_prev = lamda_y.clone()	
-			lamda_prev = torch.hstack(( lamda_x_prev, lamda_y_prev  ))
-			s_lane_prev = s_lane.clone()
 
-			primal_sol = self.compute_x_batch(b_eq_x, b_eq_y, x_obs_circle_traj, y_obs_circle_traj, a_obs, b_obs, lamda_x, lamda_y, alpha_obs, d_obs, alpha_a, d_a, alpha_v, d_v, y_ub, y_lb, s_lane, y_fin)
-	
+			alpha_obs_prev = alpha_obs.clone()
+			alpha_a_prev = alpha_a.clone()
+			alpha_v_prev = alpha_v.clone() 
+
+			d_obs_prev = d_obs.clone()
+			d_a_prev = d_a.clone()
+			d_v_prev = d_v.clone() 
+			
+
+			
+			primal_sol = self.compute_x_batch(b_eq_x, b_eq_y, x_obs_circle_traj, y_obs_circle_traj, a_obs, b_obs, lamda_x, lamda_y, alpha_obs, d_obs, alpha_a, d_a, alpha_v, d_v, y_ub, y_lb, s_lane)
 			alpha_a, d_a, lamda_x, lamda_y, alpha_v, d_v, alpha_obs, d_obs, s_lane, res_norm_batch = self.compute_alpha_d(primal_sol, x_obs_circle_traj, y_obs_circle_traj, y_ub, y_lb, a_obs, b_obs, lamda_x, lamda_y)
-
+			lamda_prev = torch.hstack(( lamda_x_prev, lamda_y_prev  ))
 			lamda = torch.hstack(( lamda_x, lamda_y  ))
 
-			r_lamda = torch.hstack(( lamda, lamda_prev, lamda-lamda_prev   ))
+			r_1_s = s_lane_prev 
+			r_2_s = s_lane
+			r_s = torch.hstack(( r_1_s, r_2_s, r_2_s-r_1_s ))
+
+			r_1_lamda = lamda_prev 
+			r_2_lamda = lamda
+			r_lamda = torch.hstack(( r_1_lamda, r_2_lamda, r_2_lamda-r_1_lamda ))
+
+			alpha_prev  = torch.hstack(( alpha_obs_prev, alpha_a_prev, alpha_v_prev   )) 
+			alpha = torch.hstack(( alpha_obs, alpha_a, alpha_v   )) 
 			
-			r_1_obs = torch.hstack(( alpha_obs_prev, d_obs_prev   ))
-			r_2_obs = torch.hstack(( alpha_obs, d_obs   ))
+			r_alpha = torch.hstack(( alpha_prev, alpha, alpha-alpha_prev ))
 
-			r_obs = torch.hstack(( r_1_obs, r_2_obs, r_2_obs-r_1_obs  ))
-
-
-			r_1_a = torch.hstack(( alpha_a_prev, d_a_prev   ))
-			r_2_a = torch.hstack(( alpha_a, d_a   ))
-
-			r_a = torch.hstack(( r_1_a, r_2_a, r_2_a-r_1_a  ))
+			d_prev = torch.hstack(( d_obs_prev, d_a_prev, d_v_prev   )) 
+			d = torch.hstack(( d_obs, d_a, d_v   )) 
+			r_d = torch.hstack(( d_prev, d, d-d_prev ))
 			
+			gru_output_s, h_s = self.gru_context_s(r_s, h_s)
+			s_delta = gru_output_s 
 
-			r_1_v = torch.hstack(( alpha_v_prev, d_v_prev   ))
-			r_2_v = torch.hstack(( alpha_v, d_v   ))
+			gru_output_lamda, h_lamda = self.gru_context_lamda(r_lamda, h_lamda)
+			lamda_delta = gru_output_lamda 
 
-			r_v = torch.hstack(( r_1_v, r_2_v, r_2_v-r_1_v  ))
+			gru_output_alpha, h_alpha = self.gru_context_alpha(r_alpha, h_alpha)
+			alpha_delta = gru_output_alpha 
 
-			r_s_lane = torch.hstack(( s_lane_prev, s_lane, s_lane-s_lane_prev  ))		
+			gru_output_d, h_d = self.gru_context_d(r_d, h_d)
+			d_delta = gru_output_d 
 
-			######################################## obstacle part	
-			gru_output_obs, h_obs = self.gru_context(r_obs, h_obs)
-			alpha_obs_delta = gru_output_obs[:, 0: self.num_obs*self.num*self.num_circles]
-			d_obs_delta = gru_output_obs[:, self.num_obs*self.num*self.num_circles : 2*self.num_obs*self.num*self.num_circles]
+			s_lane = s_lane+s_delta 
+			s_lane = torch.maximum( torch.zeros((self.num_batch, 2 * self.num), device=device), s_lane)
+			lamda = lamda+lamda_delta 
+			lamda_x = lamda[:, 0:self.nvar]
+			lamda_y = lamda[:, self.nvar:2*self.nvar]
+
+			alpha = alpha+alpha_delta 
+			d = d+d_delta 
+
+			alpha_obs = alpha[:, 0: self.num*self.num_obs*self.num_circles]
+			alpha_a = alpha[:, self.num*self.num_obs*self.num_circles : self.num*self.num_obs*self.num_circles+self.num ]
+			alpha_v = alpha[:, self.num*self.num_obs*self.num_circles+self.num : self.num*self.num_obs*self.num_circles+2*self.num ]
+
+			alpha_obs = torch.clip( alpha_obs, -torch.pi*torch.ones(( self.num_batch, self.num_obs*self.num_circles*self.num  ), device = device), torch.pi*torch.ones(( self.num_batch, self.num_obs*self.num_circles*self.num  ), device = device)  )
+			alpha_v = torch.clip( alpha_v, -torch.pi*torch.ones(( self.num_batch, self.num  ), device = device), torch.pi*torch.ones(( self.num_batch, self.num  ), device = device)  )
+			alpha_a = torch.clip( alpha_a, -torch.pi*torch.ones(( self.num_batch, self.num  ), device = device), torch.pi*torch.ones(( self.num_batch, self.num  ), device = device)  )
+			alpha = torch.hstack(( alpha_obs, alpha_a, alpha_v   )) 
 			
-			alpha_obs = alpha_obs+alpha_obs_delta
-			alpha_obs = torch.clip( alpha_obs, -torch.pi*torch.ones(( self.num_batch, self.num_obs*self.num_circles*self.num    ), device = device), torch.pi*torch.ones(( self.num_batch, self.num_obs*self.num_circles*self.num    ), device = device)    )
-			d_obs = d_obs+d_obs_delta 
+			d_obs = d[:, 0: self.num*self.num_obs*self.num_circles]
+			d_a = d[:, self.num*self.num_obs*self.num_circles : self.num*self.num_obs*self.num_circles+self.num ]
+			d_v = d[:, self.num*self.num_obs*self.num_circles+self.num : self.num*self.num_obs*self.num_circles+2*self.num ]
+
 			d_obs = torch.maximum(torch.ones((self.num_batch, self.num * self.num_obs*self.num_circles), device=device), d_obs)
-
-
-			######################################################################################
-
-			gru_output_a, h_a = self.gru_context_acc(r_a, h_a)
-			alpha_a_delta = gru_output_a[:, 0: self.num]
-			d_a_delta = gru_output_a[:, self.num : 2*self.num]
-			
-			alpha_a = alpha_a+alpha_a_delta
-			alpha_a = torch.clip( alpha_a, -torch.pi*torch.ones(( self.num_batch, self.num   ), device = device),  torch.pi*torch.ones(( self.num_batch, self.num   ), device = device)   )
-			d_a = d_a+d_a_delta 
 			d_a = torch.clip(d_a, torch.zeros((self.num_batch, self.num), device=device), torch.tensor(self.a_max).to(device) )
-  
-			##################################################################################################################
+			d_v = torch.clip(d_v,  torch.tensor(self.v_min).to(device), torch.tensor(self.v_max).to(device))
+			d = torch.hstack(( d_obs, d_a, d_v   )) 
 
-
-			gru_output_v, h_v = self.gru_context_vel(r_v, h_v)
-			alpha_v_delta = gru_output_v[:, 0: self.num]
-			d_v_delta = gru_output_v[:, self.num : 2*self.num]
-			
-			alpha_v = alpha_v+alpha_v_delta
-			alpha_v = torch.clip( alpha_v, -torch.pi*torch.ones(( self.num_batch, self.num   ), device = device),  torch.pi*torch.ones(( self.num_batch, self.num   ), device = device)   )
-			d_v = d_v+d_v_delta 
-			d_v = torch.clip(d_v, torch.zeros((self.num_batch, self.num), device=device), torch.tensor(self.v_max).to(device) )
-
-			###########################################################################################################
-
-
-			primal_sol_x = primal_sol[:,0: self.nvar]
-			primal_sol_y = primal_sol[:,self.nvar:2*self.nvar]
-
-			primal_sol = self.compute_x_init_batch(b_eq_x, b_eq_y, primal_sol_x, primal_sol_y)
 			
 
 			accumulated_res_primal_list.append(res_norm_batch)
 
-			fixed_point_residual = torch.linalg.norm(primal_sol-primal_sol_prev, dim = 1)+torch.linalg.norm(lamda_x-lamda_x_prev, dim = 1)+torch.linalg.norm(lamda_y-lamda_y_prev, dim = 1)		
+
+			fixed_point_residual = torch.linalg.norm(s_lane-s_lane_prev, dim = 1)\
+								  +torch.linalg.norm(lamda_prev-lamda, dim = 1)\
+								  +torch.linalg.norm(alpha_prev-alpha, dim = 1)\
+								  +torch.linalg.norm(d_prev-d, dim = 1)
+								  
 			accumulated_res_fixed_point_list.append(fixed_point_residual)
-
-
-
 		
 		res_primal_stack = torch.stack(accumulated_res_primal_list )
 		res_fixed_point_stack = torch.stack(accumulated_res_fixed_point_list )
 		accumulated_res_fixed_point = torch.sum(res_fixed_point_stack, dim = 0)/self.maxiter	
-		
+
   
 		accumulated_res_primal = torch.sum(res_primal_stack, dim = 0)/(self.maxiter)
 			
@@ -755,19 +737,29 @@ class Learned_QCQP(nn.Module):
 
 		inp_features = torch.cat([inp_norm, pcd_features], dim = 1)
 
-		alpha_d_obs = self.mlp_init_obs(inp_features)
-		alpha_d_acc = self.mlp_init_acc(inp_features)
-		alpha_d_vel = self.mlp_init_vel(inp_features)
-		s_lane = self.mlp_init_slane(inp_features)
-		lamda = self.mlp_init_lamda(inp_features)
+		neural_output_batch = self.mlp_init(inp_features)
+  
+		lamda = neural_output_batch[:, 0: 2*self.nvar]
+		s_lane = neural_output_batch[:, 2*self.nvar: 2*self.nvar+2*self.num]
+		alpha = neural_output_batch[:, 2*self.nvar+2*self.num:  2*self.nvar+2*self.num+(self.num_obs*self.num*self.num_circles+2*self.num)]
+		d =  neural_output_batch[:, 2*self.nvar+2*self.num+(self.num_obs*self.num*self.num_circles+2*self.num) : 2*self.nvar+2*self.num+2*(self.num_obs*self.num*self.num_circles+2*self.num)]
 
 
+		s_lane = torch.maximum( torch.zeros((self.num_batch, 2 * self.num), device=device), s_lane)
+		lamda_x = lamda[:, 0:self.nvar]
+		lamda_y = lamda[:, self.nvar:2*self.nvar]
 
-		h_0_obs = self.gru_hidden_state_init_obs(inp_features)
-		h_0_a = self.gru_hidden_state_init_acc(inp_features)
-		h_0_v = self.gru_hidden_state_init_vel(inp_features)
 		
-		primal_sol, accumulated_res_primal, accumulated_res_fixed_point, res_primal_stack, res_fixed_point_stack =  self.custom_forward(init_state_ego, x_obs_circle_traj, y_obs_circle_traj, a_obs, b_obs, y_ub, y_lb, goal_des, alpha_d_obs, alpha_d_acc, alpha_d_vel, s_lane, lamda, h_0_obs, h_0_a, h_0_v, s_lane, lamda)	
+
+		h_0_alpha = self.gru_init_alpha(inp_features)
+		h_0_d = self.gru_init_d(inp_features)
+		h_0_s = self.gru_init_s(inp_features)
+		h_0_lamda = self.gru_init_lamda(inp_features)
+		
+		
+		# h_0_primal = self.gru_hidden_state_init(inp_features)
+
+		primal_sol, accumulated_res_primal, accumulated_res_fixed_point, res_primal_stack, res_fixed_point_stack =  self.custom_forward(init_state_ego, x_obs_circle_traj, y_obs_circle_traj, a_obs, b_obs, y_ub, y_lb, goal_des, lamda_x, lamda_y, s_lane, h_0_alpha, h_0_d, h_0_s, h_0_lamda, alpha, d)	
 		
 		return primal_sol, accumulated_res_primal, accumulated_res_fixed_point, res_primal_stack, res_fixed_point_stack
 	
@@ -782,7 +774,7 @@ class Learned_QCQP(nn.Module):
 		fixed_point_loss = (0.5 * (torch.mean(accumulated_res_fixed_point)))
 		jerk_loss = 0.5*torch.mean(torch.linalg.norm(primal_sol, dim =1 ))
   		
-		loss = fixed_point_loss#+0.001*jerk_loss
+		loss = fixed_point_loss
  
 		return loss, primal_loss, fixed_point_loss
 
